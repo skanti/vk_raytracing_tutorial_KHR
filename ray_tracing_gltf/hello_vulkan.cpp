@@ -18,6 +18,7 @@
  */
 
 
+#include <iostream>
 #include <sstream>
 #include <vulkan/vulkan.hpp>
 
@@ -395,6 +396,7 @@ void HelloVulkan::destroyResources()
   m_device.destroy(m_postDescPool);
   m_device.destroy(m_postDescSetLayout);
   m_alloc.destroy(m_offscreenColor);
+  m_alloc.destroy(m_image_copy);
   m_alloc.destroy(m_offscreenDepth);
   m_device.destroy(m_offscreenRenderPass);
   m_device.destroy(m_offscreenFramebuffer);
@@ -471,6 +473,7 @@ void HelloVulkan::onResize(int /*w*/, int /*h*/)
 void HelloVulkan::createOffscreenRender()
 {
   m_alloc.destroy(m_offscreenColor);
+  m_alloc.destroy(m_image_copy);
   m_alloc.destroy(m_offscreenDepth);
 
   // Creating the color image
@@ -485,6 +488,25 @@ void HelloVulkan::createOffscreenRender()
     vk::ImageViewCreateInfo ivInfo = nvvk::makeImageViewCreateInfo(image.image, colorCreateInfo);
     m_offscreenColor               = m_alloc.createTexture(image, ivInfo, vk::SamplerCreateInfo());
     m_offscreenColor.descriptor.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    // linear image for copying
+    VkImageCreateInfo imageCreateInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageCreateInfo.imageType         = VK_IMAGE_TYPE_2D;
+    imageCreateInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    imageCreateInfo.extent = {m_size.width, m_size.height, 1};
+    imageCreateInfo.mipLevels   = 1;
+    imageCreateInfo.arrayLayers = 1;
+    imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageCreateInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageCreateInfo.tiling            = VK_IMAGE_TILING_LINEAR;
+    imageCreateInfo.usage             = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    imageCreateInfo.usage             = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    m_image_copy = m_alloc.createImage(imageCreateInfo, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+                                                            | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                                            | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
   }
 
   // Creating the depth buffer
@@ -512,6 +534,8 @@ void HelloVulkan::createOffscreenRender()
     nvvk::cmdBarrierImageLayout(cmdBuf, m_offscreenDepth.image, vk::ImageLayout::eUndefined,
                                 vk::ImageLayout::eDepthStencilAttachmentOptimal,
                                 vk::ImageAspectFlagBits::eDepth);
+    nvvk::cmdBarrierImageLayout(cmdBuf, m_image_copy.image, vk::ImageLayout::eUndefined,
+                                vk::ImageLayout::eTransferDstOptimal);
 
     genCmdBuf.submitAndWait(cmdBuf);
   }
@@ -902,4 +926,69 @@ void HelloVulkan::updateFrame()
 void HelloVulkan::resetFrame()
 {
   m_rtPushConstants.frame = -1;
+}
+
+void HelloVulkan::snapshot(const vk::CommandBuffer& cmdBuf)
+{
+  {
+    VkImageCopy region;
+    region.srcSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.srcSubresource.baseArrayLayer = 0;
+    region.srcSubresource.layerCount     = 1;
+    region.srcSubresource.mipLevel       = 0;
+    region.srcOffset      = {0, 0, 0};
+    region.dstSubresource = region.srcSubresource;
+    region.dstOffset      = {0, 0, 0};
+    region.extent = {m_size.width, m_size.height, 1};
+    vkCmdCopyImage(cmdBuf, m_offscreenColor.image, VK_IMAGE_LAYOUT_GENERAL, m_image_copy.image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  }
+
+  const VkAccessFlags        srcAccesses = VK_ACCESS_TRANSFER_WRITE_BIT;
+  const VkAccessFlags        dstAccesses = VK_ACCESS_HOST_READ_BIT;
+  const VkPipelineStageFlags srcStages   = nvvk::makeAccessMaskPipelineStageFlags(srcAccesses);
+  const VkPipelineStageFlags dstStages   = nvvk::makeAccessMaskPipelineStageFlags(dstAccesses);
+  const VkImageMemoryBarrier barrier =
+      nvvk::makeImageMemoryBarrier(m_image_copy.image, srcAccesses,
+                                   dstAccesses,  // Src and dst access masks
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,  // Src and dst layouts
+                                   VK_IMAGE_ASPECT_COLOR_BIT);
+  vkCmdPipelineBarrier(cmdBuf,                // Command buffer
+                       srcStages, dstStages,  // Src and dst pipeline stages
+                       0,                     // Dependency flags
+                       0, nullptr,            // Global memory barriers
+                       0, nullptr,            // Buffer memory barriers
+                       1, &barrier);          // Image memory barriers
+}
+
+std::vector<uint8_t> HelloVulkan::upload_image()
+{
+  // Get layout of the image (including row pitch)
+  VkImageSubresource  subResource{.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
+  VkSubresourceLayout subResourceLayout;
+  vkGetImageSubresourceLayout(m_device, m_image_copy.image, &subResource, &subResourceLayout);
+
+  using dtype = float;
+  // Map image memory so we can start copying from it
+  const dtype* imagedata = (dtype*)m_alloc.map(m_image_copy);
+  imagedata += subResourceLayout.offset;
+
+  // copy from memory pointer
+  std::vector<uint8_t> img(m_size.height * m_size.width * 4);
+
+  const int pitch = subResourceLayout.rowPitch / sizeof(dtype);
+  std::cout << "pitch: " << pitch << std::endl;
+  dtype* row = (dtype*)imagedata;
+  for(uint32_t y = 0; y < m_size.height; y++)
+  {
+    const int offset = y * pitch;
+    std::transform(row, row + pitch, img.begin() + offset,
+                   [](dtype v) { return static_cast<uint8_t>(v * 255.0f); });
+    //std::memcpy(img.data() + y * subResourceLayout.rowPitch, row, subResourceLayout.rowPitch);
+    row += pitch;
+  }
+  m_alloc.unmap(m_image_copy);
+
+  return img;
 }

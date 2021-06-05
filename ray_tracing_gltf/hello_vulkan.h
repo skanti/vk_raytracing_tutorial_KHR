@@ -116,6 +116,7 @@ public:
   vk::RenderPass              m_offscreenRenderPass;
   vk::Framebuffer             m_offscreenFramebuffer;
   nvvk::Texture               m_offscreenColor;
+  nvvk::Image                 m_image_copy;
   vk::Format                  m_offscreenColorFormat{vk::Format::eR32G32B32A32Sfloat};
   nvvk::Texture               m_offscreenDepth;
   vk::Format                  m_offscreenDepthFormat{vk::Format::eX8D24UnormPack32};
@@ -131,6 +132,8 @@ public:
   void raytrace(const vk::CommandBuffer& cmdBuf, const nvmath::vec4f& clearColor);
   void updateFrame();
   void resetFrame();
+  void snapshot(const vk::CommandBuffer& cmdBuf);
+  std::vector<uint8_t> upload_image();
 
   vk::PhysicalDeviceRayTracingPipelinePropertiesKHR   m_rtProperties;
   nvvk::RaytracingBuilderKHR                          m_rtBuilder;

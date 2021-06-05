@@ -22,6 +22,7 @@
 // pipeline If you are new to ImGui, see examples/README.txt and documentation
 // at the top of imgui.cpp.
 
+#include <iostream>
 #include <array>
 #include <vulkan/vulkan.hpp>
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
@@ -39,6 +40,9 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 #include "nvvk/context_vk.hpp"
 
 
+#include "stb_image_write.h"
+
+
 //////////////////////////////////////////////////////////////////////////
 #define UNUSED(x) (void)(x)
 //////////////////////////////////////////////////////////////////////////
@@ -53,7 +57,7 @@ static void onErrorCallback(int error, const char* description)
 }
 
 // Extra UI
-void renderUI(HelloVulkan& helloVk)
+void renderUI(HelloVulkan& helloVk, bool& do_snapshot)
 {
   ImGuiH::CameraWidget();
   if(ImGui::CollapsingHeader("Light"))
@@ -65,13 +69,17 @@ void renderUI(HelloVulkan& helloVk)
     ImGui::SliderFloat3("Position", &helloVk.m_pushConstant.lightPosition.x, -20.f, 20.f);
     ImGui::SliderFloat("Intensity", &helloVk.m_pushConstant.lightIntensity, 0.f, 150.f);
   }
+  if(ImGui::Button("Snapshot"))
+  {
+    do_snapshot = true;
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
-static int const SAMPLE_WIDTH  = 1280;
-static int const SAMPLE_HEIGHT = 720;
+static int const SAMPLE_WIDTH  = 640;
+static int const SAMPLE_HEIGHT = 480;
 
 //--------------------------------------------------------------------------------------------------
 // Application Entry
@@ -199,6 +207,7 @@ int main(int argc, char** argv)
   ImGui_ImplGlfw_InitForVulkan(window, true);
 
   // Main loop
+  bool do_snapshot = false;
   while(!glfwWindowShouldClose(window))
   {
     glfwPollEvents();
@@ -216,7 +225,7 @@ int main(int argc, char** argv)
       ImGui::ColorEdit3("Clear color", reinterpret_cast<float*>(&clearColor));
       ImGui::Checkbox("Ray Tracer mode", &useRaytracer);  // Switch between raster and ray tracing
 
-      renderUI(helloVk);
+      renderUI(helloVk, do_snapshot);
       ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
                   1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
       ImGuiH::Control::Info("", "", "(F10) Toggle Pane", ImGuiH::Control::Flags::Disabled);
@@ -263,6 +272,11 @@ int main(int argc, char** argv)
       }
     }
 
+    // snapshot
+    if (do_snapshot) {
+      helloVk.snapshot(cmdBuf);
+    }
+
     // 2nd rendering pass: tone mapper, UI
     {
       vk::RenderPassBeginInfo postRenderPassBeginInfo;
@@ -284,6 +298,18 @@ int main(int argc, char** argv)
     // Submit for display
     cmdBuf.end();
     helloVk.submitFrame();
+
+    if(do_snapshot)
+    {
+      auto        img          = helloVk.upload_image();
+      std::string filename_jpg = "./tmp.jpg";
+      stbi_write_jpg(filename_jpg.c_str(), SAMPLE_WIDTH, SAMPLE_HEIGHT, 4, img.data(),
+                     SAMPLE_WIDTH * 4 * sizeof(uint8_t));
+
+    std::cout << "image saved: " << filename_jpg << std::endl;
+    }
+
+    do_snapshot = false;
   }
 
   // Cleanup
