@@ -272,12 +272,20 @@ int main(int argc, char** argv)
       }
     }
 
+    // Tone mapping and other post processing stuff
+    {
+      // Rendering tonemapper
+      //vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
+      // Run the compute shader with one workgroup for now
+      //vkCmdDispatch(cmdBuffer, 1, 1, 1);
+    }
+
     // snapshot
     if (do_snapshot) {
       helloVk.snapshot(cmdBuf);
     }
 
-    // 2nd rendering pass: tone mapper, UI
+    // 3rd render pass: pass through + UI
     {
       vk::RenderPassBeginInfo postRenderPassBeginInfo;
       postRenderPassBeginInfo.setClearValueCount(2);
@@ -287,9 +295,8 @@ int main(int argc, char** argv)
       postRenderPassBeginInfo.setRenderArea({{}, helloVk.getSize()});
 
       cmdBuf.beginRenderPass(postRenderPassBeginInfo, vk::SubpassContents::eInline);
-      // Rendering tonemapper
-      helloVk.drawPost(cmdBuf);
       // Rendering UI
+      helloVk.drawPost(cmdBuf);
       ImGui::Render();
       ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmdBuf);
       cmdBuf.endRenderPass();

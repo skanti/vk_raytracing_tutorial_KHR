@@ -401,6 +401,12 @@ void HelloVulkan::destroyResources()
   m_device.destroy(m_offscreenRenderPass);
   m_device.destroy(m_offscreenFramebuffer);
 
+  // compute shder
+  m_device.destroy(m_tonemapPipeline);
+  m_device.destroy(m_tonemapPipelineLayout);
+  m_device.destroy(m_tonemapDescPool);
+  m_device.destroy(m_tonemapDescSetLayout);
+
   // #VKRay
   m_rtBuilder.destroy();
   m_sbtWrapper.destroy();
@@ -590,6 +596,29 @@ void HelloVulkan::createPostPipeline()
   pipelineGenerator.rasterizationState.setCullMode(vk::CullModeFlagBits::eNone);
   m_postPipeline = pipelineGenerator.createPipeline();
   m_debug.setObjectName(m_postPipeline, "post");
+
+  // create compute descriptor set
+  m_tonemapDescSetLayoutBind.addBinding(vk::DescriptorSetLayoutBinding(  // [in] G-Buffer
+      0, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute));
+  m_tonemapDescSetLayout = m_tonemapDescSetLayoutBind.createLayout(m_device);
+  m_tonemapDescPool      = m_tonemapDescSetLayoutBind.createPool(m_device, 1);
+  m_tonemapDescSet       = nvvk::allocateDescriptorSet(m_device, m_tonemapDescPool, m_tonemapDescSetLayout);
+
+  // update comp descriptors
+  std::vector<vk::WriteDescriptorSet> writes;
+  writes.emplace_back(m_tonemapDescSetLayoutBind.makeWrite(m_tonemapDescSet, 0, &m_offscreenColor.descriptor));
+  m_device.updateDescriptorSets(static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+  // create compute pipeline
+  vk::PushConstantRange push_constants = {vk::ShaderStageFlagBits::eCompute, 0, sizeof(ComputeParams)};
+  vk::PipelineLayoutCreateInfo layout_info{{}, 1, &m_tonemapDescSetLayout, 1, &push_constants};
+  m_tonemapPipelineLayout = m_device.createPipelineLayout(layout_info);
+  vk::ComputePipelineCreateInfo computePipelineCreateInfo{{}, {}, m_tonemapPipelineLayout};
+  computePipelineCreateInfo.stage =
+      nvvk::createShaderStageInfo(m_device,
+                                  nvh::loadFile("spv/tonemapping.comp.spv", true, defaultSearchPaths, true),
+                                  VK_SHADER_STAGE_COMPUTE_BIT);
+  m_tonemapPipeline = m_device.createComputePipeline({}, computePipelineCreateInfo).value;
 }
 
 //--------------------------------------------------------------------------------------------------

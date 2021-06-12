@@ -1,2 +1,3 @@
 **/spv/*.spv
 /build/*
+*.sw?
